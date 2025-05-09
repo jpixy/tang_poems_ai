@@ -1,12 +1,22 @@
-import torch
+# model.py
 import torch.nn as nn
+from config import CONFIG
 
 
 class PoetryModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim=128, hidden_dim=256):
+    def __init__(self, vocab_size):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, batch_first=True)
+        embed_dim = CONFIG.getint("Model", "embed_dim")
+        hidden_dim = CONFIG.getint("Model", "hidden_dim")
+        num_layers = CONFIG.getint("Model", "num_layers")
+
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.lstm = nn.LSTM(
+            input_size=embed_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+        )
         self.fc = nn.Linear(hidden_dim, vocab_size)
 
     def forward(self, x, hidden=None):
