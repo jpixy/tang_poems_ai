@@ -1,11 +1,12 @@
 import json
 import os
+import re
 import numpy as np
 from collections import Counter
 
 
 def load_poems(data_dir):
-    """增强健壮性的数据加载函数"""
+    """增强数据清洗的加载函数"""
     poems = []
     for filename in os.listdir(data_dir):
         if not filename.endswith(".json"):
@@ -16,27 +17,25 @@ def load_poems(data_dir):
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-                # 处理数组格式
-                if isinstance(data, list):
-                    for obj in data:
-                        if not isinstance(obj, dict):
-                            continue
-                        if "paragraphs" in obj and isinstance(obj["paragraphs"], list):
-                            poems.extend(p for p in obj["paragraphs"] if p.strip())
-                        else:
-                            print(
-                                f"警告：{filename} 中的对象缺少有效paragraphs: {obj.keys()}"
-                            )
+                # 统一处理数组/对象格式
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
 
-                # 处理单个对象格式
-                elif isinstance(data, dict):
-                    if "paragraphs" in data and isinstance(data["paragraphs"], list):
-                        poems.extend(p for p in data["paragraphs"] if p.strip())
-                    else:
-                        print(f"警告：{filename} 缺少有效paragraphs: {data.keys()}")
-
-                else:
-                    print(f"警告：{filename} 不是有效JSON对象或数组")
+                    # 提取paragraphs并清洗
+                    paragraphs = item.get("paragraphs", [])
+                    for p in paragraphs:
+                        p = p.strip()
+                        # 新增正则过滤
+                        if (
+                            len(p) >= 4  # 最小长度
+                            and re.fullmatch(
+                                r"[\u4e00-\u9fff，。！？、；：]+", p
+                            )  # 仅保留中文和常用标点
+                            and len(set(p)) >= len(p) // 2
+                        ):  # 避免重复字过多
+                            poems.append(p)
 
         except Exception as e:
             print(f"加载 {filename} 失败: {str(e)}")
@@ -46,15 +45,36 @@ def load_poems(data_dir):
     return poems
 
 
-def build_vocab(poems, min_freq=2):
+def build_vocab(poems, min_freq=5, max_freq_ratio=0.5):
+    """安全构建词汇表"""
+    chars = [char for poem in poems for char in poem]
+    counter = Counter(chars)
+    total = sum(counter.values())
+
+    vocab = {"<PAD>": 0, "<UNK>": 1}
+    for char, count in counter.items():
+        # 过滤条件：频率适中且是中文或常用标点
+        if min_freq <= count <= total * max_freq_ratio and re.fullmatch(
+            r"[\u4e00-\u9fff，。！？]", char
+        ):
+            vocab[char] = len(vocab)
+
+    print(f"最终词汇表大小: {len(vocab)}")
+    return vocab
+
+
+def build_vocab(poems, min_freq=10, max_freq_ratio=0.3):
     """构建词汇表（过滤空字符串）"""
     chars = [char for poem in poems for char in poem if poem.strip()]
-    if not chars:
-        raise ValueError("没有有效字符数据，请检查输入")
     counter = Counter(chars)
+    # 过滤条件
+    total = sum(counter.values())
     vocab = {"<PAD>": 0, "<UNK>": 1}
-    for char, freq in counter.items():
-        if freq >= min_freq:
+    for char, count in counter.items():
+        # 剔除生僻字和异常高频字
+        if (min_freq <= count <= total * max_freq_ratio) and (
+            "\u4e00" <= char <= "\u9fff" or char in "，。！？"
+        ):
             vocab[char] = len(vocab)
     return vocab
 
