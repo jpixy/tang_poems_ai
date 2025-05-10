@@ -1,56 +1,112 @@
-# model.py
-import torch.nn as nn
+from transformers import GPT2LMHeadModel, BertTokenizer
 from config import CONFIG
-import torch.nn.init as init
+from common import setup_logger
+import os
+import torch
+import psutil
+
+logger = setup_logger("Model")
 
 
-class PoetryModel(nn.Module):
-    def __init__(self, vocab_size):
-        super().__init__()
+class PoetryModel:
+    def __init__(self):
+        self._print_system_info()
+        self._print_config()
 
-        # 从配置加载参数
-        embed_dim = CONFIG.getint("Model", "embed_dim")
-        hidden_dim = CONFIG.getint("Model", "hidden_dim")
-        num_layers = CONFIG.getint("Model", "num_layers")
-        dropout_rate = CONFIG.getfloat("Model", "dropout", fallback=0.3)
+        self.pretrained_path = CONFIG["Paths"]["pretrained_model"]
+        self.freeze_spec = CONFIG["Model"]["freeze_layers"]
 
-        # 网络结构
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.lstm = nn.LSTM(
-            input_size=embed_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            dropout=dropout_rate if num_layers > 1 else 0,  # 仅在多层时启用dropout
-            bidirectional=False,
-            batch_first=True,
+        logger.info("模型初始化配置:")
+        logger.info(f"预训练路径: {self.pretrained_path}")
+        logger.info(f"冻结层配置: {self.freeze_spec}")
+
+        os.makedirs(self.pretrained_path, exist_ok=True)
+
+        mem_before = psutil.virtual_memory().used / (1024**3)
+        logger.info(f"内存使用前: {mem_before:.2f} GB")
+
+        logger.info("加载模型中...")
+        self.tokenizer = BertTokenizer.from_pretrained(
+            self.pretrained_path, low_cpu_mem_usage=True
         )
-        self.fc = nn.Linear(hidden_dim, vocab_size)
+        self.model = GPT2LMHeadModel.from_pretrained(
+            self.pretrained_path, torch_dtype=torch.float32, low_cpu_mem_usage=True
+        )
 
-        # 权重初始化
-        self._init_weights()
+        mem_after = psutil.virtual_memory().used / (1024**3)
+        logger.info(f"内存使用后: {mem_after:.2f} GB")
+        logger.info(f"内存增量: {mem_after - mem_before:.2f} GB")
 
-    def _init_weights(self):
-        """专业权重初始化方法"""
-        # Embedding层使用均匀分布初始化
-        init.uniform_(self.embedding.weight, -0.1, 0.1)
+        self._freeze_layers()
+        self.print_trainable_parameters()
+        logger.info("模型初始化完成")
 
-        # LSTM层使用正交初始化和零偏置
-        for name, param in self.lstm.named_parameters():
-            if "weight" in name:
-                init.orthogonal_(param)
-            elif "bias" in name:
-                init.zeros_(param)
-                # 设置遗忘门偏置为1（改善梯度流动）
-                n = param.size(0)
-                param.data[n // 4 : n // 2].fill_(1.0)
+    def _print_system_info(self):
+        import platform
 
-        # 全连接层使用Xavier初始化
-        init.xavier_normal_(self.fc.weight)
-        init.zeros_(self.fc.bias)
+        logger.info("系统信息:")
+        logger.info(f"操作系统: {platform.system()} {platform.release()}")
+        logger.info(f"Python版本: {platform.python_version()}")
+        logger.info(f"CPU核心数: {os.cpu_count()}")
+        logger.info(f"总内存: {psutil.virtual_memory().total / (1024**3):.2f} GB")
 
-    def forward(self, x, hidden=None):
-        x = self.embedding(x)
-        out, hidden = self.lstm(x, hidden)
-        out = self.fc(out)
-        return out, hidden
+    def _print_config(self):
+        logger.info("运行配置:")
+        for section in CONFIG.sections():
+            for key, val in CONFIG[section].items():
+                logger.info(f"{section}.{key}: {val}")
+
+    def _freeze_layers(self):
+        total_layers = len(self.model.transformer.h)
+        logger.info(f"层冻结处理 (总层数: {total_layers})")
+
+        if self.freeze_spec.lower() == "none":
+            logger.info("未冻结任何层")
+            return
+
+        for param in self.model.parameters():
+            param.requires_grad = True
+
+        if self.freeze_spec.startswith("all,-"):
+            layers_to_unfreeze = [
+                int(x) for x in self.freeze_spec.split("all,-")[1].split(",")
+            ]
+
+            for param in self.model.parameters():
+                param.requires_grad = False
+
+            for layer_num in layers_to_unfreeze:
+                if layer_num < 0:
+                    layer_num = total_layers + layer_num
+                if 0 <= layer_num < total_layers:
+                    for param in self.model.transformer.h[layer_num].parameters():
+                        param.requires_grad = True
+                    logger.info(f"解冻层 #{layer_num}")
+
+    def print_trainable_parameters(self):
+        trainable = 0
+        total = 0
+        for name, param in self.model.named_parameters():
+            total += param.numel()
+            if param.requires_grad:
+                trainable += param.numel()
+
+        logger.info("模型参数统计:")
+        logger.info(f"总参数: {total:,}")
+        logger.info(f"可训练参数: {trainable:,}")
+        logger.info(f"冻结参数: {total - trainable:,}")
+        logger.info(f"可训练比例: {trainable / total:.2%}")
+
+    def to(self, device):
+        logger.info(f"转移模型到设备: {device}")
+        self.model = self.model.to(device)
+        return self
+
+    def forward(self, input_ids, attention_mask=None, labels=None):
+        return self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            return_dict=True,
+        )
 
