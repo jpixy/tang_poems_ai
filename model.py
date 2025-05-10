@@ -4,8 +4,38 @@ from common import setup_logger
 import os
 import torch
 import psutil
+from huggingface_hub import snapshot_download
 
 logger = setup_logger("Model")
+
+
+def download_model_if_needed(model_path, model_name="uer/gpt2-chinese-poem"):
+    """下载预训练模型和tokenizer"""
+    required_files = [
+        "config.json",
+        "pytorch_model.bin",
+        "vocab.txt",
+        "special_tokens_map.json",
+        "tokenizer_config.json",
+    ]
+
+    # 检查是否所有必需文件都存在
+    all_files_exist = all(
+        os.path.exists(os.path.join(model_path, f)) for f in required_files
+    )
+
+    if not all_files_exist:
+        logger.info(f"下载预训练模型 {model_name}...")
+        os.makedirs(model_path, exist_ok=True)
+
+        # 使用snapshot_download下载整个仓库
+        snapshot_download(
+            repo_id=model_name,
+            local_dir=model_path,
+            local_dir_use_symlinks=False,
+            ignore_patterns=["*.md", "*.gitattributes", "LICENSE"],
+        )
+        logger.info(f"模型下载完成，保存到 {model_path}")
 
 
 class PoetryModel:
@@ -20,7 +50,8 @@ class PoetryModel:
         logger.info(f"预训练路径: {self.pretrained_path}")
         logger.info(f"冻结层配置: {self.freeze_spec}")
 
-        os.makedirs(self.pretrained_path, exist_ok=True)
+        # 确保模型已下载
+        download_model_if_needed(self.pretrained_path)
 
         mem_before = psutil.virtual_memory().used / (1024**3)
         logger.info(f"内存使用前: {mem_before:.2f} GB")

@@ -22,11 +22,20 @@ def setup_logger(name="App"):
         logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     )
 
-    # 控制台日志
+    # 控制台日志 - 针对Kaggle优化格式
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+    if "KAGGLE_URL_BASE" in os.environ:
+        console_handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+    else:
+        console_handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
 
     _logger.addHandler(file_handler)
     _logger.addHandler(console_handler)
+
+    # 针对Kaggle的额外设置
+    if "KAGGLE_URL_BASE" in os.environ:
+        logging.getLogger("transformers").setLevel(logging.WARNING)
+        logging.getLogger("torch").setLevel(logging.WARNING)
+
     return _logger
 
